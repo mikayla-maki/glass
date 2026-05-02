@@ -1,0 +1,21 @@
+[package]
+name = "glass-spike"
+version = "0.1.0"
+edition = "2021"
+description = "Validation spike for claude-sdk-rs — tests the four capabilities Glass depends on"
+
+[[bin]]
+name = "glass-spike"
+path = "src/main.rs"
+
+[[bin]]
+name = "echo-mcp"
+path = "src/echo_mcp.rs"
+
+[dependencies]
+claude-sdk-rs = { git = "https://github.com/bredmond1019/claude-sdk-rs", branch = "main" }
+tokio = { version = "1.40", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.10"
+futures = "0.3"
