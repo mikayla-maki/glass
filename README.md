@@ -6,6 +6,10 @@ Glass is a personal AI agent that lives in a Discord server. It organizes your l
 
 Named for the [Claude glass](https://en.wikipedia.org/wiki/Claude_glass), a pocket mirror used by 18th-century travelers to see the world reflected in simpler, more essential tones. Claude is also the model powering it.
 
+--- 
+
+Based on [Strix](https://github.com/tkellogg/open-strix), and [OpenClaw](https://openclaw.ai/), built on top of [Pi](https://pi.dev/)
+
 ---
 
 ## Design Principles
@@ -17,7 +21,7 @@ A small system that's easy to reason about. Fewer features, done well.
 If something shouldn't be possible, make it structurally impossible. Network isolation, context separation, and workspace scoping are enforced by code and containers, not by instructions to the LLM.
 
 ### Bot and agent are separate things
-The **bot** is deterministic Rust code: Discord handlers, cron scheduling, context assembly, audit logging, inbox review, Docker management. No LLM involvement.
+The **bot** is deterministic code: Discord handlers, cron scheduling, context assembly, audit logging, inbox review, container management. No LLM involvement.
 
 The **agent** is the LLM, invoked by the bot when reasoning is needed. It doesn't run persistently — it gets called with a specific context and returns a response. The bot decides when to call it, what to show it, and what to do with the output.
 
@@ -27,7 +31,7 @@ Glass maintains its own persistent identity, personality, knowledge, and self-bu
 ### Multiplicative identity
 Each Discord channel is a separate context — a project, a concern, a facet of your life. The same agent, same personality, but with different knowledge in different rooms. Your Discord server becomes the organizational structure of your life.
 
----
+---------OLD STUFF BELOW, KEPT FOR REFERENCE---------
 
 ## Architecture
 
