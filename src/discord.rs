@@ -28,6 +28,12 @@ impl MessageBus for SerenityBus {
         }
         Ok(())
     }
+
+    async fn typing(&self, channel: ConversationId) -> Result<()> {
+        let serenity_channel = serenity::model::id::ChannelId::new(channel.0);
+        serenity_channel.broadcast_typing(&self.http).await?;
+        Ok(())
+    }
 }
 
 struct Forwarder {

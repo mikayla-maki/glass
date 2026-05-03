@@ -29,14 +29,8 @@ impl TurnEngine {
         }
     }
 
-    pub fn workspace(&self) -> &Workspace {
-        &self.workspace
-    }
-
     pub async fn handle(&self, user_text: &str) -> Result<String> {
         let _guard = self.turn_lock.lock().await;
-        let events_path = self.workspace.events_log();
-        let current_path = self.workspace.current_log();
 
         memory::render_agents_md(&self.workspace)?;
 
@@ -44,12 +38,12 @@ impl TurnEngine {
         // behind it and the user msg ends up at the tail of the active window.
         compaction::maybe_compact(&self.workspace, &*self.runtime, &self.compaction_cfg).await?;
 
-        events::append_to_both(&events_path, &current_path, &Event::user(user_text))?;
+        self.workspace.append_event(&Event::user(user_text))?;
 
         // Trailing event is the user msg we just appended; split it off so
         // it appears in the prompt as "owner just sent" rather than in the
         // recent-history section.
-        let current = events::load_log(&current_path)?;
+        let current = events::load_log(&self.workspace.current_log())?;
         let (trailing, prior) = match current.split_last() {
             Some((Event::UserMessage { content, .. }, rest)) => (content.clone(), rest.to_vec()),
             _ => bail!("expected trailing UserMessage in current log after append; log malformed"),
@@ -60,7 +54,7 @@ impl TurnEngine {
             .run_turn(&self.workspace.root, &prior, &trailing)
             .await?;
 
-        events::append_to_both(&events_path, &current_path, &Event::agent(reply.clone()))?;
+        self.workspace.append_event(&Event::agent(reply.clone()))?;
 
         Ok(reply)
     }
@@ -69,82 +63,20 @@ impl TurnEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::testing::FakeAgent;
+    use crate::compaction::testing::{loose, tight};
     use crate::events::testing::{read_log, E};
-    use async_trait::async_trait;
-    use std::collections::VecDeque;
-    use std::path::Path;
-    use std::sync::Mutex as StdMutex;
-    use tempfile::TempDir;
 
-    struct FakeRuntime {
-        replies: StdMutex<VecDeque<String>>,
-        summaries: StdMutex<VecDeque<String>>,
-    }
-
-    impl FakeRuntime {
-        fn new(replies: Vec<&'static str>, summaries: Vec<&'static str>) -> Self {
-            Self {
-                replies: StdMutex::new(replies.into_iter().map(String::from).collect()),
-                summaries: StdMutex::new(summaries.into_iter().map(String::from).collect()),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl AgentRuntime for FakeRuntime {
-        async fn run_turn(&self, _w: &Path, _h: &[Event], _m: &str) -> Result<String> {
-            Ok(self
-                .replies
-                .lock()
-                .unwrap()
-                .pop_front()
-                .expect("FakeRuntime: out of replies"))
-        }
-        async fn summarize(
-            &self,
-            _w: &Path,
-            _prior: Option<&str>,
-            _transcript: &[Event],
-        ) -> Result<String> {
-            Ok(self
-                .summaries
-                .lock()
-                .unwrap()
-                .pop_front()
-                .expect("FakeRuntime: out of summaries"))
-        }
-    }
-
-    fn fresh_ws() -> (TempDir, Workspace) {
-        let tmp = TempDir::new().unwrap();
-        let ws = Workspace {
-            root: tmp.path().to_path_buf(),
-        };
-        ws.ensure_layout().unwrap();
+    fn fresh_ws() -> (tempfile::TempDir, Workspace) {
+        let (tmp, ws) = Workspace::tempdir();
         std::fs::write(ws.blocks_dir().join("identity.md"), "# Identity\nGlass.").unwrap();
         (tmp, ws)
-    }
-
-    fn loose() -> CompactionConfig {
-        CompactionConfig {
-            context_window_tokens: 10_000_000,
-            threshold_pct: 0.7,
-            keep_recent_tokens: 1000,
-        }
-    }
-
-    fn tight() -> CompactionConfig {
-        CompactionConfig {
-            context_window_tokens: 1000,
-            threshold_pct: 0.7,
-            keep_recent_tokens: 200,
-        }
     }
 
     #[tokio::test]
     async fn two_turns_no_compaction_both_logs_match() {
         let (_tmp, ws) = fresh_ws();
-        let runtime = Arc::new(FakeRuntime::new(vec!["hi", "still here"], vec![]));
+        let runtime = Arc::new(FakeAgent::new(&["hi", "still here"], &[]));
         let engine = TurnEngine::new(ws.clone(), runtime, loose());
 
         engine.handle("hello").await.unwrap();
@@ -166,9 +98,9 @@ mod tests {
         // ~216 tokens/turn (big_user ~208 + reply ~8). Threshold 700 trips
         // on turn 5's compaction check (sees ~864 tokens of prior history).
         let big = "x".repeat(800);
-        let runtime = Arc::new(FakeRuntime::new(
-            vec!["r1", "r2", "r3", "r4", "r5"],
-            vec!["compaction summary"],
+        let runtime = Arc::new(FakeAgent::new(
+            &["r1", "r2", "r3", "r4", "r5"],
+            &["compaction summary"],
         ));
         let engine = TurnEngine::new(ws.clone(), runtime, tight());
 
@@ -206,44 +138,12 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_receives_summary_at_head_of_prior_after_compaction() {
-        // Captures what the runtime sees in `prior` so we can assert the
-        // post-compaction shape directly.
-        struct CapturingRuntime {
-            replies: StdMutex<VecDeque<String>>,
-            summaries: StdMutex<VecDeque<String>>,
-            run_priors: StdMutex<Vec<Vec<E>>>,
-        }
-        #[async_trait]
-        impl AgentRuntime for CapturingRuntime {
-            async fn run_turn(&self, _w: &Path, history: &[Event], _m: &str) -> Result<String> {
-                self.run_priors
-                    .lock()
-                    .unwrap()
-                    .push(crate::events::testing::simplify(history));
-                Ok(self.replies.lock().unwrap().pop_front().unwrap())
-            }
-            async fn summarize(
-                &self,
-                _w: &Path,
-                _prior: Option<&str>,
-                _t: &[Event],
-            ) -> Result<String> {
-                Ok(self.summaries.lock().unwrap().pop_front().unwrap())
-            }
-        }
-
         let (_tmp, ws) = fresh_ws();
         let big = "x".repeat(800);
-        let runtime = Arc::new(CapturingRuntime {
-            replies: StdMutex::new(
-                ["r1", "r2", "r3", "r4", "r5"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            ),
-            summaries: StdMutex::new(["compacted"].iter().map(|s| s.to_string()).collect()),
-            run_priors: StdMutex::new(vec![]),
-        });
+        let runtime = Arc::new(FakeAgent::new(
+            &["r1", "r2", "r3", "r4", "r5"],
+            &["compacted"],
+        ));
         let engine = TurnEngine::new(ws, runtime.clone(), tight());
 
         for _ in 0..5 {
@@ -252,13 +152,13 @@ mod tests {
 
         // After at least one compaction, some run_turn call's `prior` should
         // start with a Summary.
-        let priors = runtime.run_priors.lock().unwrap();
+        let priors = runtime.priors_seen();
         let any_starts_with_summary = priors
             .iter()
-            .any(|p| matches!(p.first(), Some(E::Summary(_))));
+            .any(|p| matches!(p.first(), Some(Event::Summary { .. })));
         assert!(
             any_starts_with_summary,
-            "expected a turn whose prior starts with a Summary; got {priors:#?}"
+            "expected a turn whose prior starts with a Summary"
         );
     }
 }

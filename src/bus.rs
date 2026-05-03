@@ -1,6 +1,5 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use std::fmt;
 
 // Transport-agnostic IDs. Today every transport is Discord-shaped (u64);
 // when Signal/Telegram show up these become enums and the conversion happens
@@ -10,18 +9,6 @@ pub struct AuthorId(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ConversationId(pub u64);
-
-impl fmt::Display for AuthorId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl fmt::Display for ConversationId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct IncomingDm {
@@ -34,51 +21,110 @@ pub struct IncomingDm {
 pub trait MessageBus: Send + Sync {
     async fn next(&self) -> Option<IncomingDm>;
     async fn reply(&self, channel: ConversationId, content: &str) -> Result<()>;
+    // Show a transient "typing..." indicator. Discord auto-clears after
+    // ~10s, so the bot loop ticks this every few seconds while Pi runs.
+    async fn typing(&self, channel: ConversationId) -> Result<()>;
 }
 
-// The bot loop: pull DMs, gate by owner, hand to engine, post replies.
-// Returns when bus.next() returns None.
+// Discord's typing indicator lasts ~10s; refresh well within that.
+const TYPING_REFRESH: std::time::Duration = std::time::Duration::from_secs(7);
+
+fn actionable(msg: &IncomingDm, owner: AuthorId) -> bool {
+    if msg.author != owner {
+        tracing::warn!(author = ?msg.author, "ignoring DM from non-owner");
+        return false;
+    }
+    !msg.content.trim().is_empty()
+}
+
+// The bot loop. Pulls DMs, gates by owner, hands to engine, posts replies.
+// If a new owner DM arrives while we're mid-turn, the in-flight handle is
+// cancelled (drops the Pi child via kill_on_drop) and we restart with the
+// new message. The cancelled user message stays in the logs so the next
+// turn can still see it as context.
 pub async fn run(
     bus: &dyn MessageBus,
     engine: &crate::turn::TurnEngine,
     owner: AuthorId,
 ) -> Result<()> {
-    use tracing::{error, info, warn};
+    use tracing::{error, info};
 
-    while let Some(msg) = bus.next().await {
-        if msg.author != owner {
-            warn!(author = %msg.author, "ignoring DM from non-owner");
+    let mut pending: Option<IncomingDm> = None;
+
+    loop {
+        let msg = match pending.take() {
+            Some(m) => m,
+            None => match bus.next().await {
+                Some(m) => m,
+                None => return Ok(()),
+            },
+        };
+
+        if !actionable(&msg, owner) {
             continue;
         }
-        if msg.content.trim().is_empty() {
-            continue;
-        }
+
         info!(chars = msg.content.len(), "DM received");
         let started = std::time::Instant::now();
+        let channel = msg.channel;
 
-        match engine.handle(&msg.content).await {
-            Ok(reply) => {
-                info!(
-                    chars = reply.len(),
-                    elapsed_ms = started.elapsed().as_millis() as u64,
-                    "reply sent"
-                );
-                if let Err(e) = bus.reply(msg.channel, &reply).await {
-                    error!("failed to send reply: {e}");
+        let handle_fut = engine.handle(&msg.content);
+        tokio::pin!(handle_fut);
+
+        let mut typing_tick = tokio::time::interval(TYPING_REFRESH);
+        // First tick fires immediately so the indicator shows up before Pi
+        // has produced anything.
+
+        loop {
+            tokio::select! {
+                // Prefer the in-flight handle. Only check for a new message
+                // if the handle is actually blocked (e.g. on Pi).
+                biased;
+                result = &mut handle_fut => {
+                    match result {
+                        Ok(reply) => {
+                            info!(
+                                chars = reply.len(),
+                                elapsed_ms = started.elapsed().as_millis() as u64,
+                                "reply sent"
+                            );
+                            if let Err(e) = bus.reply(channel, &reply).await {
+                                error!("failed to send reply: {e}");
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                elapsed_ms = started.elapsed().as_millis() as u64,
+                                "turn failed: {e:#}"
+                            );
+                            let _ = bus
+                                .reply(channel, &format!("⚠️ turn failed: `{e}`"))
+                                .await;
+                        }
+                    }
+                    break;
                 }
-            }
-            Err(e) => {
-                error!(
-                    elapsed_ms = started.elapsed().as_millis() as u64,
-                    "turn failed: {e:#}"
-                );
-                let _ = bus
-                    .reply(msg.channel, &format!("⚠️ turn failed: `{e}`"))
-                    .await;
+                _ = typing_tick.tick() => {
+                    if let Err(e) = bus.typing(channel).await {
+                        // Don't fail the turn over a missing typing indicator.
+                        tracing::debug!("typing indicator failed: {e}");
+                    }
+                }
+                next = bus.next() => match next {
+                    Some(new_msg) => {
+                        if !actionable(&new_msg, owner) { continue; }
+                        info!(
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            "DM received mid-turn, cancelling current"
+                        );
+                        pending = Some(new_msg);
+                        break;
+                    }
+                    None => return Ok(()),
+                },
             }
         }
     }
-    Ok(())
 }
 
 // Split on line boundaries when possible, on UTF-8 char boundaries when
@@ -128,6 +174,7 @@ pub mod testing {
     pub struct StubBus {
         inbox: Mutex<VecDeque<IncomingDm>>,
         replies: Mutex<Vec<(ConversationId, String)>>,
+        typing_calls: std::sync::atomic::AtomicUsize,
         notify: Notify,
         closed: AtomicBool,
     }
@@ -137,9 +184,14 @@ pub mod testing {
             Self {
                 inbox: Mutex::new(VecDeque::new()),
                 replies: Mutex::new(Vec::new()),
+                typing_calls: std::sync::atomic::AtomicUsize::new(0),
                 notify: Notify::new(),
                 closed: AtomicBool::new(false),
             }
+        }
+
+        pub fn typing_count(&self) -> usize {
+            self.typing_calls.load(Ordering::Acquire)
         }
 
         pub async fn push(&self, msg: IncomingDm) {
@@ -184,6 +236,11 @@ pub mod testing {
                 .push((channel, content.to_string()));
             Ok(())
         }
+
+        async fn typing(&self, _channel: ConversationId) -> Result<()> {
+            self.typing_calls.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
     }
 }
 
@@ -191,52 +248,27 @@ pub mod testing {
 mod tests {
     use super::testing::StubBus;
     use super::*;
+    use crate::agent::testing::FakeAgent;
     use crate::agent::AgentRuntime;
-    use crate::compaction::CompactionConfig;
+    use crate::compaction::testing::loose;
     use crate::config::Workspace;
+    use crate::events::testing::E;
     use crate::events::Event;
-    use async_trait::async_trait;
     use std::path::Path;
     use std::sync::Arc;
-    use tempfile::TempDir;
 
-    // Echoes the user message. Compaction is disabled via a huge context
-    // window, so summarize() panics if reached.
-    struct EchoRuntime;
-
-    #[async_trait]
-    impl AgentRuntime for EchoRuntime {
-        async fn run_turn(&self, _ws: &Path, _h: &[Event], msg: &str) -> Result<String> {
-            Ok(format!("echo: {msg}"))
-        }
-        async fn summarize(
-            &self,
-            _ws: &Path,
-            _prior: Option<&str>,
-            _transcript: &[Event],
-        ) -> Result<String> {
-            unreachable!("bus tests use a huge context window; summarize shouldn't fire")
-        }
-    }
-
-    fn fresh_engine() -> (TempDir, crate::turn::TurnEngine) {
-        let tmp = TempDir::new().unwrap();
-        let ws = Workspace {
-            root: tmp.path().to_path_buf(),
-        };
-        ws.ensure_layout().unwrap();
-        let cfg = CompactionConfig {
-            context_window_tokens: 10_000_000,
-            threshold_pct: 0.7,
-            keep_recent_tokens: 1000,
-        };
-        let engine = crate::turn::TurnEngine::new(ws, Arc::new(EchoRuntime), cfg);
+    fn fresh_engine_with(
+        runtime: Arc<dyn AgentRuntime>,
+    ) -> (tempfile::TempDir, crate::turn::TurnEngine) {
+        let (tmp, ws) = Workspace::tempdir();
+        let engine = crate::turn::TurnEngine::new(ws, runtime, loose());
         (tmp, engine)
     }
 
     #[tokio::test]
     async fn run_loop_replies_to_owner_and_ignores_others() {
-        let (_tmp, engine) = fresh_engine();
+        let runtime = Arc::new(FakeAgent::new(&["echo: hi", "echo: still there?"], &[]));
+        let (_tmp, engine) = fresh_engine_with(runtime);
         let bus = StubBus::new();
         let owner = AuthorId(42);
         let intruder = AuthorId(99);
@@ -273,7 +305,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_loop_skips_empty_messages() {
-        let (_tmp, engine) = fresh_engine();
+        let runtime = Arc::new(FakeAgent::new(&["echo: real"], &[]));
+        let (_tmp, engine) = fresh_engine_with(runtime);
         let bus = StubBus::new();
         let owner = AuthorId(42);
 
@@ -318,6 +351,177 @@ mod tests {
         assert_eq!(v.len(), 3);
         for chunk in &v {
             assert!(chunk.len() <= 100);
+        }
+    }
+
+    #[tokio::test]
+    async fn new_dm_cancels_in_flight_handle_and_restarts() {
+        use async_trait::async_trait;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // First call to run_turn pends forever (will be cancelled). Second
+        // call returns a canned reply. Genuinely different from FakeAgent
+        // (which always pops a queue), so kept inline.
+        struct InterruptableRuntime {
+            calls: AtomicUsize,
+        }
+        #[async_trait]
+        impl AgentRuntime for InterruptableRuntime {
+            async fn run_turn(&self, _w: &Path, _h: &[Event], msg: &str) -> Result<String> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    std::future::pending::<()>().await;
+                    unreachable!()
+                }
+                Ok(format!("reply to {msg}"))
+            }
+            async fn summarize(&self, _w: &Path, _p: Option<&str>, _t: &[Event]) -> Result<String> {
+                unreachable!("compaction-disabled in this test")
+            }
+        }
+
+        let (_tmp, ws) = Workspace::tempdir();
+        let runtime = Arc::new(InterruptableRuntime {
+            calls: AtomicUsize::new(0),
+        });
+        let engine = Arc::new(crate::turn::TurnEngine::new(
+            ws.clone(),
+            runtime.clone(),
+            loose(),
+        ));
+        let bus = Arc::new(StubBus::new());
+        let owner = AuthorId(42);
+        let channel = ConversationId(1);
+
+        let bus_t = bus.clone();
+        let engine_t = engine.clone();
+        let task = tokio::spawn(async move { run(&*bus_t, &engine_t, owner).await });
+
+        // First message: bot will start handling, hit run_turn, pend forever.
+        bus.push(IncomingDm {
+            author: owner,
+            channel,
+            content: "first".into(),
+        })
+        .await;
+
+        // Wait until run_turn is reached, so we know the bot is mid-handle
+        // when we push the second message.
+        for _ in 0..1000 {
+            if runtime.calls.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
+
+        // Second message: should cancel the first handle, restart with this.
+        bus.push(IncomingDm {
+            author: owner,
+            channel,
+            content: "second".into(),
+        })
+        .await;
+        bus.close();
+
+        task.await.unwrap().unwrap();
+
+        // Both messages reached run_turn (first cancelled mid-flight, second completed).
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 2);
+
+        // Audit log: both UserMessages, exactly one AgentMessage (for "second").
+        let log = crate::events::testing::read_log(&ws.events_log());
+        let users = log.iter().filter(|e| matches!(e, E::User(_))).count();
+        let agents: Vec<_> = log.iter().filter(|e| matches!(e, E::Agent(_))).collect();
+        assert_eq!(users, 2);
+        assert_eq!(agents.len(), 1);
+        assert!(matches!(agents[0], E::Agent(s) if s == "reply to second"));
+
+        // One reply was sent over the bus.
+        let replies = bus.replies().await;
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0].1, "reply to second");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn typing_indicator_refreshes_during_long_run() {
+        // Paused time lets us drive the typing-tick interval deterministically.
+        // SlowRuntime parks run_turn on a sleep we control via tokio::time::advance.
+        use async_trait::async_trait;
+        use std::time::Duration;
+
+        struct SlowRuntime;
+        #[async_trait]
+        impl AgentRuntime for SlowRuntime {
+            async fn run_turn(&self, _w: &Path, _h: &[Event], _m: &str) -> Result<String> {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok("done".into())
+            }
+            async fn summarize(&self, _w: &Path, _p: Option<&str>, _t: &[Event]) -> Result<String> {
+                unreachable!()
+            }
+        }
+
+        let (_tmp, ws) = Workspace::tempdir();
+        let engine = Arc::new(crate::turn::TurnEngine::new(
+            ws,
+            Arc::new(SlowRuntime),
+            loose(),
+        ));
+        let bus = Arc::new(StubBus::new());
+        let owner = AuthorId(42);
+
+        bus.push(IncomingDm {
+            author: owner,
+            channel: ConversationId(1),
+            content: "hi".into(),
+        })
+        .await;
+
+        let bus_t = bus.clone();
+        let engine_t = engine.clone();
+        let task = tokio::spawn(async move { run(&*bus_t, &engine_t, owner).await });
+
+        // Advance past the 60s run_turn sleep in 7s steps. Yield between
+        // advances so the bot loop polls the typing interval.
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(7)).await;
+        }
+        tokio::task::yield_now().await;
+
+        bus.close();
+        task.await.unwrap().unwrap();
+
+        // 60s window / TYPING_REFRESH (7s) = 8 refreshes, plus the immediate
+        // first tick = 9 total.
+        assert_eq!(bus.typing_count(), 9);
+        assert_eq!(bus.replies().await.len(), 1);
+    }
+
+    #[test]
+    fn chunk_message_preserves_per_line_prefixes_across_splits() {
+        // Each tool line carries its own `-# ` Discord-subtext prefix. Forcing
+        // a chunk boundary between lines must not strip prefixes from any
+        // line in any chunk — same property would apply to `> ` quote prefixes.
+        use std::fmt::Write as _;
+        let mut s = String::new();
+        for i in 0..25 {
+            let _ = writeln!(s, "-# `Tool{i}(arg)`");
+        }
+        s.push_str("\nanswer body text");
+
+        let chunks = chunk_message(&s, 200);
+        assert!(chunks.len() > 1, "expected multiple chunks");
+        for chunk in &chunks {
+            for line in chunk.lines() {
+                if line.contains("Tool") {
+                    assert!(
+                        line.starts_with("-# "),
+                        "tool line lost its prefix in chunk: {line:?}"
+                    );
+                }
+            }
         }
     }
 

@@ -93,64 +93,10 @@ pub async fn maybe_compact(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::events::testing::{read_log, simplify, E};
-    use async_trait::async_trait;
-    use std::path::Path;
-    use std::sync::Mutex as StdMutex;
-    use tempfile::TempDir;
+pub mod testing {
+    use super::CompactionConfig;
 
-    // Panics on run_turn; captures summarize calls.
-    struct StubRuntime {
-        canned: StdMutex<Option<String>>,
-        seen: StdMutex<Vec<(Option<String>, Vec<Event>)>>,
-    }
-
-    impl StubRuntime {
-        fn new(canned: &str) -> Self {
-            Self {
-                canned: StdMutex::new(Some(canned.into())),
-                seen: StdMutex::new(vec![]),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl AgentRuntime for StubRuntime {
-        async fn run_turn(&self, _w: &Path, _h: &[Event], _m: &str) -> Result<String> {
-            unreachable!("compaction tests don't drive run_turn");
-        }
-        async fn summarize(
-            &self,
-            _w: &Path,
-            prior: Option<&str>,
-            transcript: &[Event],
-        ) -> Result<String> {
-            self.seen
-                .lock()
-                .unwrap()
-                .push((prior.map(String::from), transcript.to_vec()));
-            Ok(self.canned.lock().unwrap().take().unwrap_or_default())
-        }
-    }
-
-    fn fresh_ws() -> (TempDir, Workspace) {
-        let tmp = TempDir::new().unwrap();
-        let ws = Workspace {
-            root: tmp.path().to_path_buf(),
-        };
-        ws.ensure_layout().unwrap();
-        (tmp, ws)
-    }
-
-    fn seed(ws: &Workspace, events: &[Event]) {
-        for e in events {
-            events::append_to_both(&ws.events_log(), &ws.current_log(), e).unwrap();
-        }
-    }
-
-    fn tight() -> CompactionConfig {
+    pub fn tight() -> CompactionConfig {
         CompactionConfig {
             context_window_tokens: 1000,
             threshold_pct: 0.7, // = 700-token threshold
@@ -158,17 +104,31 @@ mod tests {
         }
     }
 
-    fn loose() -> CompactionConfig {
+    pub fn loose() -> CompactionConfig {
         CompactionConfig {
             context_window_tokens: 10_000_000,
             threshold_pct: 0.7,
             keep_recent_tokens: 1000,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::{loose, tight};
+    use super::*;
+    use crate::agent::testing::FakeAgent;
+    use crate::events::testing::{read_log, simplify, E};
+
+    fn seed(ws: &Workspace, events: &[Event]) {
+        for e in events {
+            ws.append_event(e).unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn no_op_when_under_threshold() {
-        let (_tmp, ws) = fresh_ws();
+        let (_tmp, ws) = Workspace::tempdir();
         seed(
             &ws,
             &[
@@ -177,13 +137,12 @@ mod tests {
                 Event::user("brief chat"),
             ],
         );
-        let runtime = StubRuntime::new("(unused)");
+        let runtime = FakeAgent::new(&[], &[]);
 
         let did = maybe_compact(&ws, &runtime, &loose()).await.unwrap();
 
         assert!(!did);
-        assert!(runtime.seen.lock().unwrap().is_empty());
-        // Both logs unchanged.
+        assert!(runtime.summary_calls().is_empty());
         let expected = vec![E::user("hello"), E::agent("hi"), E::user("brief chat")];
         assert_eq!(read_log(&ws.events_log()), expected);
         assert_eq!(read_log(&ws.current_log()), expected);
@@ -191,7 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn rewrites_current_log_with_summary_plus_kept_tail() {
-        let (_tmp, ws) = fresh_ws();
+        let (_tmp, ws) = Workspace::tempdir();
         // Each ~200 tokens; 4 events = ~800 tokens, over the 700 threshold.
         let big = "x".repeat(800);
         seed(
@@ -203,7 +162,7 @@ mod tests {
                 Event::agent(&big),
             ],
         );
-        let runtime = StubRuntime::new("the summary");
+        let runtime = FakeAgent::new(&[], &["the summary"]);
 
         let did = maybe_compact(&ws, &runtime, &tight()).await.unwrap();
 
@@ -231,23 +190,16 @@ mod tests {
 
     #[tokio::test]
     async fn carries_prior_summary_forward_into_next_summarize_call() {
-        let (_tmp, ws) = fresh_ws();
+        let (_tmp, ws) = Workspace::tempdir();
         let big = "x".repeat(800);
         // Pre-seed current.jsonl with a Summary at the head — the post-compaction
         // shape from a previous run.
-        events::append_to_both(
-            &ws.events_log(),
-            &ws.current_log(),
-            &Event::summary("first summary"),
-        )
-        .unwrap();
+        ws.append_event(&Event::summary("first summary")).unwrap();
         for _ in 0..4 {
-            events::append_to_both(&ws.events_log(), &ws.current_log(), &Event::user(&big))
-                .unwrap();
-            events::append_to_both(&ws.events_log(), &ws.current_log(), &Event::agent(&big))
-                .unwrap();
+            ws.append_event(&Event::user(&big)).unwrap();
+            ws.append_event(&Event::agent(&big)).unwrap();
         }
-        let runtime = StubRuntime::new("second summary");
+        let runtime = FakeAgent::new(&[], &["second summary"]);
 
         let did = maybe_compact(&ws, &runtime, &tight()).await.unwrap();
 
@@ -255,10 +207,13 @@ mod tests {
 
         // The summarize call received the prior summary as `prior`,
         // and the transcript contained no Summary events (it was peeled off).
-        let calls = runtime.seen.lock().unwrap();
+        let calls = runtime.summary_calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0.as_deref(), Some("first summary"));
-        assert!(calls[0].1.iter().all(|e| !e.is_summary()));
+        assert!(calls[0]
+            .1
+            .iter()
+            .all(|e| !matches!(e, Event::Summary { .. })));
 
         // Current log now starts with the NEW summary, not the old one.
         let current = read_log(&ws.current_log());
@@ -267,15 +222,13 @@ mod tests {
 
     #[tokio::test]
     async fn second_call_in_a_row_is_a_no_op() {
-        let (_tmp, ws) = fresh_ws();
+        let (_tmp, ws) = Workspace::tempdir();
         let big = "x".repeat(800);
         for _ in 0..4 {
-            events::append_to_both(&ws.events_log(), &ws.current_log(), &Event::user(&big))
-                .unwrap();
-            events::append_to_both(&ws.events_log(), &ws.current_log(), &Event::agent(&big))
-                .unwrap();
+            ws.append_event(&Event::user(&big)).unwrap();
+            ws.append_event(&Event::agent(&big)).unwrap();
         }
-        let runtime = StubRuntime::new("summary");
+        let runtime = FakeAgent::new(&[], &["summary"]);
 
         // First call: triggers.
         assert!(maybe_compact(&ws, &runtime, &tight()).await.unwrap());
@@ -287,7 +240,7 @@ mod tests {
     // and silently dropped the kept tail. Pin it.
     #[tokio::test]
     async fn does_not_lose_kept_tail() {
-        let (_tmp, ws) = fresh_ws();
+        let (_tmp, ws) = Workspace::tempdir();
         let big = "x".repeat(800);
         seed(
             &ws,
@@ -298,7 +251,7 @@ mod tests {
                 Event::agent("specifically this kept tail event"),
             ],
         );
-        let runtime = StubRuntime::new("summary");
+        let runtime = FakeAgent::new(&[], &["summary"]);
 
         maybe_compact(&ws, &runtime, &tight()).await.unwrap();
 

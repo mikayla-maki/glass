@@ -26,11 +26,11 @@ async fn main() -> Result<()> {
         "selected model"
     );
 
-    let runtime = Arc::new(
-        PiRuntime::new(cfg.pi_command.clone())
-            .with_model(model.pi_arg.clone())
-            .with_extra_args(model.extra_pi_args.clone()),
-    );
+    let runtime = Arc::new(PiRuntime {
+        command: cfg.pi_command.clone(),
+        model_arg: model.pi_arg.clone(),
+        extra_args: model.extra_pi_args.clone(),
+    });
 
     let compaction_cfg = CompactionConfig {
         context_window_tokens: model.context_window_tokens,

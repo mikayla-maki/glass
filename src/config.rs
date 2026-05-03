@@ -1,4 +1,5 @@
 use crate::bus::AuthorId;
+use crate::events::{self, Event};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
@@ -41,6 +42,24 @@ impl Workspace {
         std::fs::create_dir_all(self.history_dir())?;
         Ok(())
     }
+
+    // Audit first; if we crash between writes, audit is canonical and
+    // current.jsonl is one event behind (recoverable, fail mode of choice).
+    pub fn append_event(&self, event: &Event) -> Result<()> {
+        events::append(&self.events_log(), event)?;
+        events::append(&self.current_log(), event)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn tempdir() -> (tempfile::TempDir, Self) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ws = Workspace {
+            root: tmp.path().to_path_buf(),
+        };
+        ws.ensure_layout().unwrap();
+        (tmp, ws)
+    }
 }
 
 impl Config {
@@ -72,5 +91,22 @@ impl Config {
             pi_command,
             models_config_path,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::testing::{read_log, E};
+
+    #[test]
+    fn append_event_writes_to_both_logs() {
+        let (_tmp, ws) = Workspace::tempdir();
+        ws.append_event(&Event::user("hello")).unwrap();
+        ws.append_event(&Event::agent("hi")).unwrap();
+
+        let expected = vec![E::user("hello"), E::agent("hi")];
+        assert_eq!(read_log(&ws.events_log()), expected);
+        assert_eq!(read_log(&ws.current_log()), expected);
     }
 }

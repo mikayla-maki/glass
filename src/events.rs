@@ -57,10 +57,6 @@ impl Event {
         }
     }
 
-    pub fn is_summary(&self) -> bool {
-        matches!(self, Event::Summary { .. })
-    }
-
     // Rough chars/4 heuristic. Uses bytes (slightly conservative on non-ASCII,
     // which makes compaction trigger slightly earlier; safe).
     pub fn estimated_tokens(&self) -> usize {
@@ -82,14 +78,6 @@ pub fn append(log: &Path, event: &Event) -> Result<()> {
     let line = serde_json::to_string(event)?;
     f.write_all(line.as_bytes())?;
     f.write_all(b"\n")?;
-    Ok(())
-}
-
-// Audit first; if we crash between writes, audit is canonical and
-// current.jsonl is one event behind (recoverable, fail mode of choice).
-pub fn append_to_both(events_log: &Path, current_log: &Path, event: &Event) -> Result<()> {
-    append(events_log, event)?;
-    append(current_log, event)?;
     Ok(())
 }
 
@@ -206,20 +194,6 @@ mod tests {
             read_log(tmp.path()),
             vec![E::summary("rolled up"), E::user("kept")]
         );
-    }
-
-    #[test]
-    fn append_to_both_writes_to_each_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let events = tmp.path().join("events.jsonl");
-        let current = tmp.path().join("current.jsonl");
-
-        append_to_both(&events, &current, &Event::user("hello")).unwrap();
-        append_to_both(&events, &current, &Event::agent("hi")).unwrap();
-
-        let expected = vec![E::user("hello"), E::agent("hi")];
-        assert_eq!(read_log(&events), expected);
-        assert_eq!(read_log(&current), expected);
     }
 
     #[test]
