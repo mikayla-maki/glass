@@ -1,0 +1,9 @@
+/target
+/.env
+
+# AGENTS.md is regenerated from blocks/*.md before every Pi invocation.
+# No need to track it.
+/workspace/AGENTS.md
+
+# Pi's own per-workspace caches if it puts any here
+/workspace/.pi/
