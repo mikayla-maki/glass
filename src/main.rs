@@ -9,6 +9,7 @@ use glass::{
     dm_log::DmLog,
     loom::{LoomCli, LoomRunner},
     orchestrator_socket,
+    state::StateStore,
 };
 use std::sync::Arc;
 
@@ -139,6 +140,8 @@ async fn run_daemon() -> Result<()> {
     let socket_path = cfg.socket_path();
     let cron_store = CronStore::new(cfg.cron_path());
     let invocations_dir = cfg.invocations_dir();
+    let state_store = StateStore::new(cfg.state_path());
+    let initial_state = state_store.load();
 
     tracing::info!(
         manifest = %cfg.manifest.display(),
@@ -171,11 +174,26 @@ async fn run_daemon() -> Result<()> {
     );
     let dispatcher = Arc::new(Dispatcher::new(runner));
 
-    let connected = discord::connect(&cfg.discord_token, cfg.operator_id).await?;
-    tracing::info!(
-        operator_channel = ?connected.operator_channel,
-        "discord connected; operator DM channel resolved"
-    );
+    let connected = discord::connect(
+        &cfg.discord_token,
+        cfg.operator_id,
+        initial_state.last_dm_id,
+    )
+    .await?;
+    if connected.catchup_count > 0 {
+        tracing::info!(
+            operator_channel = ?connected.operator_channel,
+            catchup = connected.catchup_count,
+            last_dm_id = ?initial_state.last_dm_id,
+            "discord connected; replaying missed DMs"
+        );
+    } else {
+        tracing::info!(
+            operator_channel = ?connected.operator_channel,
+            last_dm_id = ?initial_state.last_dm_id,
+            "discord connected; no missed DMs to replay"
+        );
+    }
 
     let bus_arc: Arc<dyn MessageBus> = Arc::new(connected.bus);
     orchestrator_socket::spawn(
@@ -200,6 +218,7 @@ async fn run_daemon() -> Result<()> {
         &dispatcher,
         &dm_log,
         &invocations_dir,
+        &state_store,
         &cfg.manifest,
         cfg.operator_id,
     )

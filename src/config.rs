@@ -27,6 +27,10 @@ impl Config {
     pub fn invocations_dir(&self) -> PathBuf {
         self.system_data.join("invocations")
     }
+
+    pub fn state_path(&self) -> PathBuf {
+        self.system_data.join("state.json")
+    }
 }
 
 impl Config {

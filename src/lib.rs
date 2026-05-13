@@ -7,3 +7,4 @@ pub mod dm_log;
 pub mod invocation_log;
 pub mod loom;
 pub mod orchestrator_socket;
+pub mod state;

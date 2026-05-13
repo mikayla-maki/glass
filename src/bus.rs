@@ -1,6 +1,7 @@
 use crate::dispatcher::Dispatcher;
 use crate::dm_log::{self, DmLog};
 use crate::invocation_log::{InvocationContext, InvocationLog, InvocationStatus, Trigger};
+use crate::state::{OrchestratorState, StateStore};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
@@ -26,6 +27,11 @@ pub struct IncomingDm {
     /// from before an orchestrator restart) rather than always reading
     /// inbound DMs as "just arrived."
     pub timestamp: DateTime<Local>,
+    /// Discord message snowflake id. The bus persists this as
+    /// `last_dm_id` in the orchestrator state after each actionable DM so
+    /// the next startup can query Discord for anything newer and replay
+    /// missed messages.
+    pub message_id: u64,
 }
 
 /// Format an incoming DM as the prompt Loom sees: a timestamp prefix in
@@ -72,6 +78,7 @@ pub async fn run(
     dispatcher: &Dispatcher,
     dm_log: &DmLog,
     invocations_dir: &Path,
+    state_store: &StateStore,
     manifest: &Path,
     operator: AuthorId,
 ) -> Result<()> {
@@ -95,6 +102,14 @@ pub async fn run(
         info!(chars = msg.content.len(), "DM received");
         if let Err(e) = dm_log.append(dm_log::Direction::In, &msg.content).await {
             warn!("dm_log: failed to log inbound: {e:#}");
+        }
+        // Persist the inbound message id so the next startup can ask
+        // Discord for everything after it. Warn-only — a state-write
+        // failure shouldn't take down a turn that otherwise succeeds.
+        if let Err(e) = state_store.save(&OrchestratorState {
+            last_dm_id: Some(msg.message_id),
+        }) {
+            warn!("state: failed to save last_dm_id: {e:#}");
         }
         let started = std::time::Instant::now();
         let channel = msg.channel;
@@ -408,12 +423,23 @@ mod tests {
     }
 
     fn dm(author: AuthorId, channel: ConversationId, content: &str) -> IncomingDm {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        // Synthesize monotonic message ids per call so tests that push
+        // multiple DMs get distinct ids (matches what Discord would send).
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         IncomingDm {
             author,
             channel,
             content: content.into(),
             timestamp: ts(),
+            message_id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         }
+    }
+
+    fn fresh_state_store() -> (tempfile::TempDir, StateStore) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = StateStore::new(dir.path().join("state.json"));
+        (dir, store)
     }
 
     /// The wire-shaped prompt the bus passes to the runner for `content`.
@@ -442,11 +468,13 @@ mod tests {
         bus.close();
 
         let inv_dir = fresh_invocations_dir();
+        let (_state_dir, state_store) = fresh_state_store();
         run(
             &bus,
             &dispatcher,
             &dm_log,
             inv_dir.path(),
+            &state_store,
             &manifest(),
             operator,
         )
@@ -482,11 +510,13 @@ mod tests {
         bus.close();
 
         let inv_dir = fresh_invocations_dir();
+        let (_state_dir, state_store) = fresh_state_store();
         run(
             &bus,
             &dispatcher,
             &dm_log,
             inv_dir.path(),
+            &state_store,
             &manifest(),
             operator,
         )
@@ -565,12 +595,15 @@ mod tests {
         let dm_log_t = dm_log.clone();
         let inv_dir = fresh_invocations_dir();
         let inv_path = inv_dir.path().to_path_buf();
+        let (_state_dir, state_store) = fresh_state_store();
+        let state_store_t = state_store.clone();
         let task = tokio::spawn(async move {
             run(
                 &*bus_t,
                 &dispatcher_t,
                 &dm_log_t,
                 &inv_path,
+                &state_store_t,
                 &PathBuf::from("./manifests/glass.toml"),
                 operator,
             )
@@ -642,12 +675,15 @@ mod tests {
         let dm_log_t = dm_log.clone();
         let inv_dir = fresh_invocations_dir();
         let inv_path = inv_dir.path().to_path_buf();
+        let (_state_dir, state_store) = fresh_state_store();
+        let state_store_t = state_store.clone();
         let task = tokio::spawn(async move {
             run(
                 &*bus_t,
                 &dispatcher_t,
                 &dm_log_t,
                 &inv_path,
+                &state_store_t,
                 &PathBuf::from("./manifests/glass.toml"),
                 operator,
             )
