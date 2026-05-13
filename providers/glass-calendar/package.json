@@ -14,7 +14,7 @@
     "provider": "./dist/index.js"
   },
   "devDependencies": {
-    "@mcmaki/loom": "^0.1.4",
+    "@mcmaki/loom": "^0.1.5",
     "@types/node": "^20.11.0",
     "typescript": "^5.4.0"
   }

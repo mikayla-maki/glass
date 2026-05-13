@@ -74,7 +74,7 @@ impl EventHandler for Forwarder {
     }
 }
 
-/// Connected Discord client: a bus to drive the DM loop, the owner's
+/// Connected Discord client: a bus to drive the DM loop, the operator's
 /// resolved DM channel (so unsolicited cron-side `send_dm` calls have a
 /// target), and a join handle on the underlying serenity gateway task.
 pub struct Connected {
@@ -93,7 +93,7 @@ pub async fn connect(token: &str, owner: AuthorId) -> Result<Connected> {
 
     let http = client.http.clone();
 
-    // Resolve / open the DM channel to the owner so the orchestrator can
+    // Resolve / open the DM channel to the operator so the orchestrator can
     // initiate sends (e.g., from cron) without waiting for an inbound DM
     // first. Discord guarantees one DM channel per user pair; this returns
     // the existing one if it exists.

@@ -10,6 +10,6 @@
     "build": "npm run build --workspaces --if-present"
   },
   "dependencies": {
-    "@mcmaki/loom": "^0.1.4"
+    "@mcmaki/loom": "^0.1.5"
   }
 }

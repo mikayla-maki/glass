@@ -32,6 +32,9 @@ stream = true
 [session]
 layers = ["identity", "companion", "in-memory"]
 
+[session.identity]
+vault_path = "${GLASS_VAULT_DIR}"
+
 [tools]
 bash          = "builtin"
 read_file     = "builtin"
@@ -45,11 +48,13 @@ send_dm       = "companion"
 calendar_list = "calendar"
 calendar_add  = "calendar"
 
+# `${GLASS_VAULT_DIR}` is substituted from the env var at manifest-parse
+# time (Loom ≥0.1.5). Set GLASS_VAULT_DIR in `.env` to an absolute path.
 [capabilities]
-bash       = { subprocess = "*", paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
-read_file  = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
-write_file = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
-edit_file  = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
-find       = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+bash       = { subprocess = "*", paths = ["${GLASS_VAULT_DIR}"] }
+read_file  = { paths = ["${GLASS_VAULT_DIR}"] }
+write_file = { paths = ["${GLASS_VAULT_DIR}"] }
+edit_file  = { paths = ["${GLASS_VAULT_DIR}"] }
+find       = { paths = ["${GLASS_VAULT_DIR}"] }
 web_search = { allowed_domains = "*" }
 web_fetch  = { allowed_domains = "*" }

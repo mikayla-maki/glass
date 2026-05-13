@@ -1,4 +1,4 @@
-//! Append-only log of every DM Glass exchanges with the owner — both
+//! Append-only log of every DM Glass exchanges with the operator — both
 //! inbound (owner-to-Glass) and outbound (Glass-to-owner, whether via the
 //! streaming DM agent or a `send_dm` tool call from any agent).
 //!
@@ -12,7 +12,7 @@
 //!   `{"at": "2026-05-13T16:00:00-08:00", "direction": "in" | "out",
 //!     "content": "..."}`
 //!
-//! `direction` is the only orientation we record: `in` is from the owner,
+//! `direction` is the only orientation we record: `in` is from the operator,
 //! `out` is from Glass (any agent context). The "which agent produced this"
 //! distinction can be reconstructed from invocation logs (next PR) if
 //! audit ever needs it; tools should not need agent-identity awareness to

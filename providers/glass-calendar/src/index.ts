@@ -77,8 +77,8 @@ class CalendarListTool implements Tool {
     "of `{start, end, title, location?}` objects. " +
     "`start_when` / `end_when` accept gcalcli's natural-language date " +
     "parser: 'today', 'tomorrow', 'next monday', or YYYY-MM-DD. Use this " +
-    "to check what's on Mikayla's plate before scheduling, surfacing " +
-    "conflicts, or referencing recent events.";
+    "to check what's coming up before scheduling, surface conflicts, or " +
+    "reference recent events.";
   inputSchema = {
     type: "object",
     additionalProperties: false,

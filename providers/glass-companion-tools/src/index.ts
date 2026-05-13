@@ -3,7 +3,7 @@
  *
  * Contributes two tools and one session layer:
  *
- *   - `send_dm`   — post a Discord DM to Mikayla outside the normal reply
+ *   - `send_dm`   — post a Discord DM to the operator outside the normal reply
  *                   flow (used by the cron agent, which has no implicit
  *                   reply channel, and by the DM agent for "going async"
  *                   beats).
@@ -117,8 +117,8 @@ function resolveSocketPath(ctx: ToolContext): string {
 class SendDmTool implements Tool {
   name = "send_dm";
   description =
-    "Send a Discord DM to Mikayla outside the normal reply flow. Use this " +
-    "from a scheduled wake-up (the cron agent has no implicit reply " +
+    "Send a Discord DM to the operator outside the normal reply flow. Use " +
+    "this from a scheduled wake-up (the cron agent has no implicit reply " +
     "channel) or when you want to announce 'going async, will follow up' " +
     "mid-conversation. The orchestrator coalesces rapid-fire calls into " +
     "one message so you don't spam Discord — it's still best to write one " +
@@ -326,7 +326,7 @@ function formatLogTime(iso: string): string {
 }
 
 function formatEntry(e: DmEntry): string {
-  const speaker = e.direction === "in" ? "Mikayla" : "me";
+  const speaker = e.direction === "in" ? "owner" : "me";
   const time = formatLogTime(e.at);
   const lines = e.content.split("\n");
   const first = lines[0] ?? "";

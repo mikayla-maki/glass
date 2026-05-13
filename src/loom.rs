@@ -318,7 +318,7 @@ impl Renderer {
             _ => {
                 // user_message_chunk, tool_call_update, plan, usage_update,
                 // available_commands_update, current_mode_update, stop —
-                // not surfaced to the owner.
+                // not surfaced to the operator.
             }
         }
     }

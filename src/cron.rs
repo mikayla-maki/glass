@@ -20,7 +20,8 @@
 //!
 //! Catch-up policy: if a recurring entry's bot was offline through many
 //! slots, the poller fires it ONCE on resume and sets `last_fired_at = now`,
-//! skipping the rest. Mikayla's stated preference: "fire once, no spamming."
+//! skipping the rest. Long offline gaps collapse into a single fire — no
+//! spamming the operator with backlogged reminders.
 //!
 //! Concurrency: every read-modify-write goes through `lock`. The
 //! schedule-tool append path and the poller share the same store; the
@@ -544,7 +545,7 @@ pub fn spawn_poller(
                 let (tx, mut rx) = mpsc::channel::<String>(16);
                 // Drain the streamed output and log each rendered message
                 // at info level. Cron's user-visible output is silent
-                // (only `send_dm` reaches Mikayla), but we still want
+                // (only `send_dm` reaches the operator), but we still want
                 // server-side visibility into what the agent said/did when
                 // diagnosing failures — the per-invocation log captures
                 // the full transcript; this tracing line is for real-time

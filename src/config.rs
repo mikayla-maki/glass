@@ -34,11 +34,11 @@ impl Config {
         let discord_token =
             std::env::var("DISCORD_BOT_TOKEN").context("DISCORD_BOT_TOKEN not set")?;
 
-        let owner_id = std::env::var("OWNER_DISCORD_ID")
-            .context("OWNER_DISCORD_ID not set")?
+        let owner_id = std::env::var("OPERATOR_DISCORD_ID")
+            .context("OPERATOR_DISCORD_ID not set")?
             .parse::<u64>()
             .map(AuthorId)
-            .context("OWNER_DISCORD_ID must be a numeric Discord user ID")?;
+            .context("OPERATOR_DISCORD_ID must be a numeric Discord user ID")?;
 
         let loom_command = std::env::var("LOOM_COMMAND").unwrap_or_else(|_| "loom".into());
 

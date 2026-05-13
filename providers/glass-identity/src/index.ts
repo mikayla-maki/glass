@@ -22,7 +22,7 @@
  *   layers = ["compacting", "identity", "file"]
  *
  *   [session.identity]
- *   vault_path = "~/Dropbox/glass-vault"
+ *   vault_path = "${GLASS_VAULT_DIR}"
  */
 
 import * as path from "node:path";
@@ -39,7 +39,12 @@ import type {
 
 const PROVIDER_NAME = "glass-identity";
 
-const DEFAULT_VAULT_PATH = "~/Dropbox/glass-vault";
+// Generic fallback when the manifest doesn't set `[session.identity].vault_path`.
+// Real installs almost always override via the manifest (typically using the
+// `${GLASS_VAULT_DIR}` substitution — see manifests/glass.toml). Set this to
+// something neutral so a bare-bones agent.toml without a vault config still
+// boots, even if it can't read soul.md.
+const DEFAULT_VAULT_PATH = "~/glass-vault";
 
 interface IdentityConfig {
   vault_path: string;
