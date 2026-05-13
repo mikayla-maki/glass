@@ -54,7 +54,7 @@ pub enum InvocationStatus {
     /// Loom exited non-zero, or our spawn / stream code errored.
     Err(String),
     /// The orchestrator dropped the runner future before completion
-    /// (typically because a new owner DM arrived mid-turn and the bus
+    /// (typically because a new OPERATOR DM arrived mid-turn and the bus
     /// cancelled the in-flight handle).
     Cancelled,
 }

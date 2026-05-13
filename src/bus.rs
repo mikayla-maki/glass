@@ -52,16 +52,16 @@ pub trait MessageBus: Send + Sync {
 // Discord's typing indicator lasts ~10s; refresh well within that.
 const TYPING_REFRESH: std::time::Duration = std::time::Duration::from_secs(7);
 
-fn actionable(msg: &IncomingDm, owner: AuthorId) -> bool {
-    if msg.author != owner {
-        tracing::warn!(author = ?msg.author, "ignoring DM from non-owner");
+fn actionable(msg: &IncomingDm, OPERATOR: AuthorId) -> bool {
+    if msg.author != OPERATOR {
+        tracing::warn!(author = ?msg.author, "ignoring DM from non-OPERATOR");
         return false;
     }
     !msg.content.trim().is_empty()
 }
 
-// The bot loop. Pulls DMs, gates by owner, hands to the loom runner, posts
-// every reply the runner streams. If a new owner DM arrives while we're
+// The bot loop. Pulls DMs, gates by OPERATOR, hands to the loom runner, posts
+// every reply the runner streams. If a new OPERATOR DM arrives while we're
 // mid-turn, the in-flight handle is cancelled (drops the loom child via
 // `kill_on_drop`) and we restart with the new message. Any messages already
 // posted to Discord stay there — partial output on cancellation is an honest
@@ -73,7 +73,7 @@ pub async fn run(
     dm_log: &DmLog,
     invocations_dir: &Path,
     manifest: &Path,
-    owner: AuthorId,
+    operator: AuthorId,
 ) -> Result<()> {
     use tracing::{error, info, warn};
 
@@ -88,7 +88,7 @@ pub async fn run(
             },
         };
 
-        if !actionable(&msg, owner) {
+        if !actionable(&msg, operator) {
             continue;
         }
 
@@ -170,7 +170,7 @@ pub async fn run(
                     }
                     next = bus.next(), if run_result.is_none() && !bus_closed => match next {
                         Some(new_msg) => {
-                            if !actionable(&new_msg, owner) { continue; }
+                            if !actionable(&new_msg, operator) { continue; }
                             info!(
                                 elapsed_ms = started.elapsed().as_millis() as u64,
                                 "DM received mid-turn, cancelling current"
@@ -422,7 +422,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_loop_replies_to_owner_and_ignores_others() {
+    async fn run_loop_replies_to_operator_and_ignores_others() {
         let runner = Arc::new(MockLoomRunner::new(&[
             &["echo: hi"],
             &["echo: still there?"],
@@ -430,14 +430,15 @@ mod tests {
         let dispatcher = Dispatcher::new(runner.clone());
         let (_dlog_dir, dm_log) = fresh_dm_log();
         let bus = StubBus::new();
-        let owner = AuthorId(42);
+        let operator = AuthorId(42);
         let intruder = AuthorId(99);
-        let owner_channel = ConversationId(200);
+        let operator_channel = ConversationId(200);
 
         bus.push(dm(intruder, ConversationId(100), "intruder"))
             .await;
-        bus.push(dm(owner, owner_channel, "hi")).await;
-        bus.push(dm(owner, owner_channel, "still there?")).await;
+        bus.push(dm(operator, operator_channel, "hi")).await;
+        bus.push(dm(operator, operator_channel, "still there?"))
+            .await;
         bus.close();
 
         let inv_dir = fresh_invocations_dir();
@@ -447,14 +448,14 @@ mod tests {
             &dm_log,
             inv_dir.path(),
             &manifest(),
-            owner,
+            operator,
         )
         .await
         .unwrap();
 
         let replies = bus.replies().await;
         assert_eq!(replies.len(), 2, "intruder message should be ignored");
-        assert_eq!(replies[0].0, owner_channel);
+        assert_eq!(replies[0].0, operator_channel);
         assert_eq!(replies[0].1, "echo: hi");
         assert_eq!(replies[1].1, "echo: still there?");
 
@@ -474,10 +475,10 @@ mod tests {
         let dispatcher = Dispatcher::new(runner);
         let (_dlog_dir, dm_log) = fresh_dm_log();
         let bus = StubBus::new();
-        let owner = AuthorId(42);
+        let operator = AuthorId(42);
 
-        bus.push(dm(owner, ConversationId(1), "   ")).await;
-        bus.push(dm(owner, ConversationId(1), "real")).await;
+        bus.push(dm(operator, ConversationId(1), "   ")).await;
+        bus.push(dm(operator, ConversationId(1), "real")).await;
         bus.close();
 
         let inv_dir = fresh_invocations_dir();
@@ -487,7 +488,7 @@ mod tests {
             &dm_log,
             inv_dir.path(),
             &manifest(),
-            owner,
+            operator,
         )
         .await
         .unwrap();
@@ -556,7 +557,7 @@ mod tests {
         let dispatcher = Arc::new(Dispatcher::new(runner.clone()));
         let (_dlog_dir, dm_log) = fresh_dm_log();
         let bus = Arc::new(StubBus::new());
-        let owner = AuthorId(42);
+        let operator = AuthorId(42);
         let channel = ConversationId(1);
 
         let bus_t = bus.clone();
@@ -571,13 +572,13 @@ mod tests {
                 &dm_log_t,
                 &inv_path,
                 &PathBuf::from("./manifests/glass.toml"),
-                owner,
+                operator,
             )
             .await
         });
 
         // First message: runner pends forever.
-        bus.push(dm(owner, channel, "first")).await;
+        bus.push(dm(operator, channel, "first")).await;
 
         // Wait until the runner is reached, so we know the bot is mid-handle
         // when we push the second message.
@@ -590,7 +591,7 @@ mod tests {
         assert_eq!(runner.calls.load(Ordering::SeqCst), 1);
 
         // Second message: should cancel the first handle, restart with this.
-        bus.push(dm(owner, channel, "second")).await;
+        bus.push(dm(operator, channel, "second")).await;
         bus.close();
 
         task.await.unwrap().unwrap();
@@ -632,9 +633,9 @@ mod tests {
         let dispatcher = make_dispatcher(SlowRunner);
         let (_dlog_dir, dm_log) = fresh_dm_log();
         let bus = Arc::new(StubBus::new());
-        let owner = AuthorId(42);
+        let operator = AuthorId(42);
 
-        bus.push(dm(owner, ConversationId(1), "hi")).await;
+        bus.push(dm(operator, ConversationId(1), "hi")).await;
 
         let bus_t = bus.clone();
         let dispatcher_t = dispatcher.clone();
@@ -648,7 +649,7 @@ mod tests {
                 &dm_log_t,
                 &inv_path,
                 &PathBuf::from("./manifests/glass.toml"),
-                owner,
+                operator,
             )
             .await
         });

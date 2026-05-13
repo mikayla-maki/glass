@@ -95,7 +95,7 @@ pub async fn spawn(
     socket_path: PathBuf,
     cron_store: CronStore,
     bus: Arc<dyn MessageBus>,
-    owner_channel: ConversationId,
+    operator_channel: ConversationId,
     dm_log: DmLog,
 ) -> Result<()> {
     if socket_path.exists() {
@@ -111,7 +111,7 @@ pub async fn spawn(
     tokio::spawn(dm_coalescer(
         dm_rx,
         bus,
-        owner_channel,
+        operator_channel,
         dm_log,
         SEND_DM_COALESCE,
         SEND_DM_MAX_WAIT,

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 pub struct Config {
     pub discord_token: String,
-    pub owner_id: AuthorId,
+    pub operator_id: AuthorId,
     pub loom_command: String,
     pub manifest: PathBuf,
     pub cron_manifest: PathBuf,
@@ -34,7 +34,7 @@ impl Config {
         let discord_token =
             std::env::var("DISCORD_BOT_TOKEN").context("DISCORD_BOT_TOKEN not set")?;
 
-        let owner_id = std::env::var("OPERATOR_DISCORD_ID")
+        let operator_id = std::env::var("OPERATOR_DISCORD_ID")
             .context("OPERATOR_DISCORD_ID not set")?
             .parse::<u64>()
             .map(AuthorId)
@@ -59,7 +59,7 @@ impl Config {
 
         Ok(Self {
             discord_token,
-            owner_id,
+            operator_id,
             loom_command,
             manifest,
             cron_manifest,

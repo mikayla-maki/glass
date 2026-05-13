@@ -1,5 +1,5 @@
 //! Append-only log of every DM Glass exchanges with the operator — both
-//! inbound (owner-to-Glass) and outbound (Glass-to-owner, whether via the
+//! inbound (OPERATOR-to-Glass) and outbound (Glass-to-OPERATOR, whether via the
 //! streaming DM agent or a `send_dm` tool call from any agent).
 //!
 //! Lives in `$GLASS_SYSTEM_DATA/dm-log.jsonl`, not the vault. This is a

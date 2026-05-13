@@ -171,10 +171,10 @@ async fn run_daemon() -> Result<()> {
     );
     let dispatcher = Arc::new(Dispatcher::new(runner));
 
-    let connected = discord::connect(&cfg.discord_token, cfg.owner_id).await?;
+    let connected = discord::connect(&cfg.discord_token, cfg.operator_id).await?;
     tracing::info!(
-        owner_channel = ?connected.owner_channel,
-        "discord connected; owner DM channel resolved"
+        operator_channel = ?connected.operator_channel,
+        "discord connected; operator DM channel resolved"
     );
 
     let bus_arc: Arc<dyn MessageBus> = Arc::new(connected.bus);
@@ -182,7 +182,7 @@ async fn run_daemon() -> Result<()> {
         socket_path,
         cron_store.clone(),
         bus_arc.clone(),
-        connected.owner_channel,
+        connected.operator_channel,
         dm_log.clone(),
     )
     .await?;
@@ -201,7 +201,7 @@ async fn run_daemon() -> Result<()> {
         &dm_log,
         &invocations_dir,
         &cfg.manifest,
-        cfg.owner_id,
+        cfg.operator_id,
     )
     .await?;
 

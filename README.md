@@ -16,11 +16,71 @@ you have your own Glass. The bot's identity (its "self") lives in your vault's
 
 ## Architecture
 
-The real design lives in [`docs/architecture.md`](./docs/architecture.md).
-Read that first. Historical designs:
-[`docs/refactor-v0.2.md`](./docs/refactor-v0.2.md) (the previous Rust-only
-shape) and [`docs/old-design.md`](./docs/old-design.md) (the original v0
-sketch).
+Glass is three pieces:
+
+- A **Rust orchestrator** (this repo, in `src/`). Owns Discord, the turn
+  lock (sequential dispatch), the cron poller, the unix socket companion
+  tools talk back on, and per-invocation logging. Doesn't run any agent
+  loop itself — it spawns `loom prompt` per turn and streams the output
+  back to Discord.
+- **[Loom](https://github.com/mcmaki/loom)**, vendored as an npm workspace
+  dependency. Runs the actual agent loop: harness, session, tool dispatch.
+  Glass configures it through manifests in `manifests/`.
+- **TypeScript providers** (under `providers/`) that contribute the
+  Glass-specific bits to Loom: identity & current-time system-prompt
+  sections, the `schedule`/`send_dm` tools, the `dm-history` session layer,
+  and the gcalcli wrapper.
+
+### Two agents, one self
+
+Glass runs in two contexts that share `_glass/soul.md` (so it's one
+identity) but differ in everything else:
+
+- **DM agent** (`manifests/glass.toml`) — interactive. Session layers are
+  `["compacting", "identity", "file"]`: `compacting` keeps context
+  bounded as the chat grows; `file` persists across restarts. Output
+  streams to Discord in real time.
+- **Cron agent** (`manifests/cron.toml`) — stateless per fire, woken by
+  scheduled prompts the agent set for herself. Session layers are
+  `["identity", "companion", "in-memory"]`: no cross-fire persistence, but
+  the `companion` layer surfaces the last ~20 DM messages as `## recent
+  conversation` so she has context for what to say (or not say). Output
+  reaches you only through explicit `send_dm` calls; otherwise the turn
+  is silent.
+
+### Three storage layers
+
+- **Vault** (`$GLASS_VAULT_DIR`) — Glass-the-agent's content. Her soul,
+  her notes, anything she writes. Sync it however you like (Dropbox,
+  iCloud, git). The manifests pin all filesystem capabilities here, so
+  this is also the security boundary for her file access.
+- **Loom data** (`~/Library/Application Support/loom/agents/glass/`) —
+  Loom's session storage: every turn's events, the `FileSession`'s log.
+  Loom owns this.
+- **Glass system** (`$GLASS_SYSTEM_DATA`, default
+  `~/Library/Application Support/Glass/`) — orchestrator operational
+  state: `dm-log.jsonl` (every inbound/outbound DM), `cron.jsonl`
+  (scheduled entries), `invocations/*.jsonl` (per-turn audit logs with
+  the full assembled system prompt + every agent event), and the
+  `orchestrator.sock` companion tools connect to.
+
+### Trust line
+
+Two enforced boundaries, both at startup:
+
+- **Operator gate.** Every incoming DM is checked against `OPERATOR_DISCORD_ID`
+  before reaching Loom. Anyone else is dropped silently with a warn log.
+- **Capability paths.** `bash`, `read_file`, `write_file`, `edit_file`,
+  and `find` are all scoped to `$GLASS_VAULT_DIR` in both manifests via
+  `${GLASS_VAULT_DIR}` substitution. Glass can't escape her vault for
+  filesystem ops; `bash` runs under macOS's `sandbox-exec` via Loom's
+  built-in sandbox integration.
+
+The operators's identity (name, relationship, history, preferences) lives in
+`_glass/soul.md` — per-install user content, not committed code. Glass
+reads it into her system prompt every turn via the `glass-identity`
+provider. That's why this repo is genuinely shareable: the code has no
+hardcoded sense of *who* it's for.
 
 ## Running
 
@@ -68,18 +128,9 @@ no global install step.
   capability tree without running anything.
 - `./node_modules/.bin/loom prompt manifests/glass.toml "hello"` — one-shot
   prompt from the CLI, bypassing Discord.
-
-### Storage layers
-
-- **Vault** (`$GLASS_VAULT_DIR`) — Glass-the-agent's content. What she thinks
-  and writes about. Sync this however you like.
-- **Loom data** (`~/Library/Application Support/loom/agents/glass/` on macOS,
-  `$XDG_DATA_HOME/loom/agents/glass/` on Linux) — Loom's session storage.
-- **Glass system** (`~/Library/Application Support/Glass/` on macOS,
-  `$XDG_DATA_HOME/glass/` on Linux) — orchestrator state: dm-log,
-  invocations/, cron.jsonl, orchestrator.sock. Override with
-  `GLASS_SYSTEM_DATA`. Per-invocation transcripts (system prompt + every
-  agent event + outcome) live in `invocations/`; `jq` them for forensics.
+- `jq -c . < "$GLASS_SYSTEM_DATA/invocations/<file>.jsonl"` — forensicate
+  any past turn. Each file has the assembled system prompt, every agent
+  event, and the final outcome.
 
 ## Layout
 
@@ -94,5 +145,4 @@ no global install step.
   layer that surfaces recent conversation to the cron agent.
 - `providers/glass-calendar/` — typed wrapper around `gcalcli` for read +
   add.
-- `docs/` — architecture + historical design notes.
 - `AGENTS.md` — project rules for human/AI contributors.

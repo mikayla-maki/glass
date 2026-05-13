@@ -326,7 +326,7 @@ function formatLogTime(iso: string): string {
 }
 
 function formatEntry(e: DmEntry): string {
-  const speaker = e.direction === "in" ? "owner" : "me";
+  const speaker = e.direction === "in" ? "OPERATOR" : "me";
   const time = formatLogTime(e.at);
   const lines = e.content.split("\n");
   const first = lines[0] ?? "";

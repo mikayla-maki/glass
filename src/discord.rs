@@ -79,11 +79,11 @@ impl EventHandler for Forwarder {
 /// target), and a join handle on the underlying serenity gateway task.
 pub struct Connected {
     pub bus: SerenityBus,
-    pub owner_channel: ConversationId,
+    pub operator_channel: ConversationId,
     pub gateway: JoinHandle<()>,
 }
 
-pub async fn connect(token: &str, owner: AuthorId) -> Result<Connected> {
+pub async fn connect(token: &str, operator: AuthorId) -> Result<Connected> {
     let (tx, rx) = mpsc::channel(64);
     let intents = GatewayIntents::DIRECT_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
@@ -97,10 +97,10 @@ pub async fn connect(token: &str, owner: AuthorId) -> Result<Connected> {
     // initiate sends (e.g., from cron) without waiting for an inbound DM
     // first. Discord guarantees one DM channel per user pair; this returns
     // the existing one if it exists.
-    let private = serenity::model::id::UserId::new(owner.0)
+    let private = serenity::model::id::UserId::new(operator.0)
         .create_dm_channel(&http)
         .await?;
-    let owner_channel = ConversationId(private.id.get());
+    let operator_channel = ConversationId(private.id.get());
 
     let gateway = tokio::spawn(async move {
         if let Err(e) = client.start().await {
@@ -113,7 +113,7 @@ pub async fn connect(token: &str, owner: AuthorId) -> Result<Connected> {
             http,
             rx: Mutex::new(rx),
         },
-        owner_channel,
+        operator_channel,
         gateway,
     })
 }
