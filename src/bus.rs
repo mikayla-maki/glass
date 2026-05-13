@@ -52,16 +52,16 @@ pub trait MessageBus: Send + Sync {
 // Discord's typing indicator lasts ~10s; refresh well within that.
 const TYPING_REFRESH: std::time::Duration = std::time::Duration::from_secs(7);
 
-fn actionable(msg: &IncomingDm, OPERATOR: AuthorId) -> bool {
-    if msg.author != OPERATOR {
+fn actionable(msg: &IncomingDm, operator: AuthorId) -> bool {
+    if msg.author != operator {
         tracing::warn!(author = ?msg.author, "ignoring DM from non-OPERATOR");
         return false;
     }
     !msg.content.trim().is_empty()
 }
 
-// The bot loop. Pulls DMs, gates by OPERATOR, hands to the loom runner, posts
-// every reply the runner streams. If a new OPERATOR DM arrives while we're
+// The bot loop. Pulls DMs, gates by operator, hands to the loom runner, posts
+// every reply the runner streams. If a new operator DM arrives while we're
 // mid-turn, the in-flight handle is cancelled (drops the loom child via
 // `kill_on_drop`) and we restart with the new message. Any messages already
 // posted to Discord stay there — partial output on cancellation is an honest
