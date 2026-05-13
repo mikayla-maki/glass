@@ -53,12 +53,19 @@ impl EventHandler for Forwarder {
         if msg.guild_id.is_some() {
             return;
         }
+        // Discord records the send time as UTC; convert to the orchestrator's
+        // local timezone so it matches the `The current time is …` line in
+        // the system prompt and any `when` values the agent generates for
+        // the schedule tool. The bus formats it into a `[YYYY-MM-DD HH:MM]`
+        // prefix on the prompt the agent sees.
+        let timestamp = (*msg.timestamp).with_timezone(&chrono::Local);
         if let Err(e) = self
             .tx
             .send(IncomingDm {
                 author: AuthorId(msg.author.id.get()),
                 channel: ConversationId(msg.channel_id.get()),
                 content: msg.content,
+                timestamp,
             })
             .await
         {
@@ -67,7 +74,16 @@ impl EventHandler for Forwarder {
     }
 }
 
-pub async fn connect(token: &str) -> Result<(SerenityBus, JoinHandle<()>)> {
+/// Connected Discord client: a bus to drive the DM loop, the owner's
+/// resolved DM channel (so unsolicited cron-side `send_dm` calls have a
+/// target), and a join handle on the underlying serenity gateway task.
+pub struct Connected {
+    pub bus: SerenityBus,
+    pub owner_channel: ConversationId,
+    pub gateway: JoinHandle<()>,
+}
+
+pub async fn connect(token: &str, owner: AuthorId) -> Result<Connected> {
     let (tx, rx) = mpsc::channel(64);
     let intents = GatewayIntents::DIRECT_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
@@ -76,17 +92,28 @@ pub async fn connect(token: &str) -> Result<(SerenityBus, JoinHandle<()>)> {
         .await?;
 
     let http = client.http.clone();
-    let handle = tokio::spawn(async move {
+
+    // Resolve / open the DM channel to the owner so the orchestrator can
+    // initiate sends (e.g., from cron) without waiting for an inbound DM
+    // first. Discord guarantees one DM channel per user pair; this returns
+    // the existing one if it exists.
+    let private = serenity::model::id::UserId::new(owner.0)
+        .create_dm_channel(&http)
+        .await?;
+    let owner_channel = ConversationId(private.id.get());
+
+    let gateway = tokio::spawn(async move {
         if let Err(e) = client.start().await {
             error!("serenity client exited: {e:#}");
         }
     });
 
-    Ok((
-        SerenityBus {
+    Ok(Connected {
+        bus: SerenityBus {
             http,
             rx: Mutex::new(rx),
         },
-        handle,
-    ))
+        owner_channel,
+        gateway,
+    })
 }

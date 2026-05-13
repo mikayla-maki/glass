@@ -1,0 +1,55 @@
+[agent]
+name = "glass-cron"
+system_prompt = """
+You are Glass, woken from a scheduled prompt you set for yourself in a previous turn.
+"""
+
+[providers]
+identity  = { path = "../providers/glass-identity" }
+companion = { path = "../providers/glass-companion-tools" }
+calendar  = { path = "../providers/glass-calendar" }
+
+[harness]
+provider = "anthropic"
+model = "claude-sonnet-4-6"
+maxTokens = 4096
+maxTurnRequests = 16
+stream = true
+
+# Stateless per fire: no `compacting` (no context to compact across turns),
+# no `file` (no cross-fire persistence). Each cron fire is a clean slate.
+# Three layers, outer to inner:
+#   - identity:   Glass's soul + current local time (system prompt section).
+#   - companion:  `## recent conversation` from the last ~20 dm-log entries,
+#                 so the cron agent can see where the conversation left off
+#                 even without a Loom session history.
+#   - in-memory:  Per-fire event storage. Holds the user message and any
+#                 tool calls/results for the duration of the turn. Required:
+#                 identity and companion are both system-prompt contributors
+#                 with pass-through push/pull, so without a real storage
+#                 layer the harness pulls an empty event list and the model
+#                 call fails before it leaves the box.
+[session]
+layers = ["identity", "companion", "in-memory"]
+
+[tools]
+bash          = "builtin"
+read_file     = "builtin"
+write_file    = "builtin"
+edit_file     = "builtin"
+find          = "builtin"
+web_search    = "anthropic"
+web_fetch     = "anthropic"
+schedule      = "companion"
+send_dm       = "companion"
+calendar_list = "calendar"
+calendar_add  = "calendar"
+
+[capabilities]
+bash       = { subprocess = "*", paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+read_file  = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+write_file = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+edit_file  = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+find       = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+web_search = { allowed_domains = "*" }
+web_fetch  = { allowed_domains = "*" }

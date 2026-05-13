@@ -1,0 +1,21 @@
+{
+  "name": "@glass/calendar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "description": "Glass calendar tools — typed wrapper around gcalcli for Google Calendar read + add. Argv-only (no shell), narrow input schema, narrow output.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "loom": {
+    "provider": "./dist/index.js"
+  },
+  "devDependencies": {
+    "@mcmaki/loom": "^0.1.4",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "glass-workspace",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Glass workspace — vendored Loom + glass providers.",
+  "workspaces": [
+    "providers/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present"
+  },
+  "dependencies": {
+    "@mcmaki/loom": "^0.1.4"
+  }
+}

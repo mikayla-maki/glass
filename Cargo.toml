@@ -2,7 +2,7 @@
 name = "glass"
 version = "0.0.1"
 edition = "2021"
-description = "A small Claude glass — Discord DM bot that invokes Pi with a Strix-style memory system."
+description = "Glass — Discord DM orchestrator around a Loom-driven agent."
 license = "MIT"
 
 [lib]
@@ -20,15 +20,17 @@ serenity = { version = "0.12", default-features = false, features = [
     "model",
     "cache",
     "rustls_backend",
+    "chrono",
 ] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "fs", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-chrono = { version = "0.4", features = ["serde"] }
 dotenvy = "0.15"
+dirs = "5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+cron = "0.15"
 anyhow = "1"
 async-trait = "0.1"
-toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

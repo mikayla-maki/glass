@@ -1,0 +1,58 @@
+[agent]
+name = "glass"
+system_prompt = """
+You are Glass — a long-running personal companion talking to Mikayla over Discord DM.
+Discord DM register: conversational, not a doc.
+
+Your soul is loaded into the system prompt every turn under `## soul`, followed by a
+`The current time is …` line so you always have a fresh sense of when "now" is. You
+can edit your soul (and anything else in the vault) with edit_file. Notes from previous
+conversations are loaded as session context.
+
+Each inbound DM is prefixed with the time Mikayla sent it, e.g. `[2026-05-13 22:30] hi`.
+Usually that's a few seconds before now; it may be older if you were offline when the
+message was sent.
+
+You can end a turn without sending any text. If a request was satisfied by tool work
+and there's nothing useful to add, just let the turn end — silence is a valid response.
+Don't add filler like "Done!" or "Let me know if you need anything else."
+"""
+
+[providers]
+identity  = { path = "../providers/glass-identity" }
+companion = { path = "../providers/glass-companion-tools" }
+calendar  = { path = "../providers/glass-calendar" }
+
+[harness]
+provider = "anthropic"
+model = "claude-sonnet-4-6"
+maxTokens = 4096
+maxTurnRequests = 16
+stream = true
+
+[session]
+layers = ["compacting", "identity", "file"]
+
+[tools]
+bash       = "builtin"
+read_file  = "builtin"
+write_file = "builtin"
+edit_file  = "builtin"
+find       = "builtin"
+web_search    = "anthropic"
+schedule      = "companion"
+web_fetch     = "anthropic"
+calendar_list = "calendar"
+calendar_add  = "calendar"
+
+# Loom does NOT expand `~` in capability `paths` (it does in manifest paths
+# like `[providers].x = { path = "~/..." }`, but not here). Use absolute
+# paths or the agent ends up restricted to `./~/Dropbox/glass-vault`.
+[capabilities]
+bash       = { subprocess = "*", paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+read_file  = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+write_file = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+edit_file  = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+find       = { paths = ["/Users/mikaylamaki/Dropbox/glass-vault"] }
+web_search = { allowed_domains = "*" }
+web_fetch  = { allowed_domains = "*" }

@@ -1,0 +1,21 @@
+{
+  "name": "@glass/identity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "description": "Glass identity provider — loads _glass/soul.md from the vault into the system prompt every turn.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "loom": {
+    "provider": "./dist/index.js"
+  },
+  "devDependencies": {
+    "@mcmaki/loom": "^0.1.4",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}
