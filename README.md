@@ -132,6 +132,20 @@ no global install step.
   any past turn. Each file has the assembled system prompt, every agent
   event, and the final outcome.
 
+### Autostart at login (macOS)
+
+`./scripts/install-autostart.sh` installs a LaunchAgent at
+`~/Library/LaunchAgents/dev.glass.glass.plist`. It builds the release
+binary, builds the providers, writes the plist, and loads it via
+`launchctl`. Glass then starts at login and auto-restarts on crash; logs
+go to `$GLASS_SYSTEM_DATA/launchd.{out,err}.log`.
+
+Idempotent — re-run after `git pull` to rebuild and reload. Uninstall
+with `./scripts/uninstall-autostart.sh`. Manual control via the standard
+`launchctl load|unload` against the plist path.
+
+(Linux: equivalent setup via a systemd user service. Not scripted here.)
+
 ## Layout
 
 - `src/` — Rust orchestrator (Discord bus, Loom subprocess wrapper, cron
